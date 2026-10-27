@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Nahafuchu</AssemblyName>
+    <RootNamespace>Nahafuchu</RootNamespace>
+    <ApplicationIcon>Assets\Nahafuchu.ico</ApplicationIcon>
+    <Version>1.0.1</Version>
+    <Product>Nahafuchu</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="SetupWizard\**\*.cs" />
+  </ItemGroup>
+</Project>
+
