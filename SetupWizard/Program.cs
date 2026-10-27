@@ -10,17 +10,34 @@ namespace NahafuchuSetup;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
+        if (args.Any(argument => argument.Equals("/S", StringComparison.OrdinalIgnoreCase)
+            || argument.Equals("/silent", StringComparison.OrdinalIgnoreCase)
+            || argument.Equals("--silent", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                SetupWizard.InstallSilently();
+                return 0;
+            }
+            catch (Exception exception)
+            {
+                SetupWizard.WriteFailureLog(exception);
+                return 1;
+            }
+        }
+
         ApplicationConfiguration.Initialize();
         Application.Run(new SetupWizard());
+        return 0;
     }
 }
 
 internal sealed class SetupWizard : Form
 {
     private const string AppName = "Nahafuchu";
-    private const string AppVersion = "1.0.1";
+    private const string AppVersion = "1.0.2";
     private const string PayloadResource = "NahafuchuSetup.Payload.exe";
     private const string UninstallerResource = "NahafuchuSetup.Uninstall.ps1";
 
@@ -310,15 +327,17 @@ internal sealed class SetupWizard : Form
 
             CreateShortcut(
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), AppName, $"{AppName}.lnk"),
-                executable);
+                executable,
+                _destination);
             if (_createDesktopShortcut)
             {
                 CreateShortcut(
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"{AppName}.lnk"),
-                    executable);
+                    executable,
+                    _destination);
             }
 
-            RegisterUninstaller(executable);
+            RegisterUninstaller(_destination, executable);
             _page = 4;
             RenderPage();
         }
@@ -359,6 +378,25 @@ internal sealed class SetupWizard : Form
         }
     }
 
+    internal static void InstallSilently()
+    {
+        var destination = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            AppName);
+        var executable = Path.Combine(destination, "Nahafuchu.exe");
+
+        StopRunningNahafuchu();
+        Directory.CreateDirectory(destination);
+        ExtractResource(PayloadResource, executable);
+        ExtractResource(UninstallerResource, Path.Combine(destination, "Uninstall.ps1"));
+        CreateShortcut(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), AppName, $"{AppName}.lnk"),
+            executable,
+            destination);
+        RegisterUninstaller(destination, executable);
+    }
+
     private static void ExtractResource(string resourceName, string destination)
     {
         using var source = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
@@ -367,7 +405,7 @@ internal sealed class SetupWizard : Form
         source.CopyTo(target);
     }
 
-    private void CreateShortcut(string shortcutPath, string executable)
+    private static void CreateShortcut(string shortcutPath, string executable, string workingDirectory)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(shortcutPath)!);
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
@@ -380,7 +418,7 @@ internal sealed class SetupWizard : Form
             try
             {
                 shortcut.TargetPath = executable;
-                shortcut.WorkingDirectory = _destination;
+                shortcut.WorkingDirectory = workingDirectory;
                 shortcut.IconLocation = $"{executable},0";
                 shortcut.Save();
             }
@@ -397,7 +435,7 @@ internal sealed class SetupWizard : Form
         }
     }
 
-    private void RegisterUninstaller(string executable)
+    private static void RegisterUninstaller(string destination, string executable)
     {
         using var key = Registry.CurrentUser.CreateSubKey(
             @"Software\Microsoft\Windows\CurrentVersion\Uninstall\Nahafuchu",
@@ -405,11 +443,11 @@ internal sealed class SetupWizard : Form
         key.SetValue("DisplayName", AppName, RegistryValueKind.String);
         key.SetValue("DisplayVersion", AppVersion, RegistryValueKind.String);
         key.SetValue("Publisher", AppName, RegistryValueKind.String);
-        key.SetValue("InstallLocation", _destination, RegistryValueKind.String);
+        key.SetValue("InstallLocation", destination, RegistryValueKind.String);
         key.SetValue("DisplayIcon", executable, RegistryValueKind.String);
         key.SetValue(
             "UninstallString",
-            $"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(_destination, "Uninstall.ps1")}\"",
+            $"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(destination, "Uninstall.ps1")}\"",
             RegistryValueKind.String);
         key.SetValue("NoModify", 1, RegistryValueKind.DWord);
         key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
@@ -431,7 +469,7 @@ internal sealed class SetupWizard : Form
         }
     }
 
-    private static void WriteFailureLog(Exception exception)
+    internal static void WriteFailureLog(Exception exception)
     {
         try
         {

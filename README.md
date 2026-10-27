@@ -13,9 +13,11 @@ The low-level keyboard hook consumes plain `F10`, so the foreground application 
 
 ## Portable version
 
-Unzip `Nahafuchu-Portable-1.0.1.zip` to a folder you can write to and run `Nahafuchu.exe`. The app does not need administrator rights.
+Unzip `Nahafuchu-Portable-1.0.2.zip` to a folder you can write to and run `Nahafuchu.exe`. The app does not need administrator rights.
 
 ## Installer version
 
-Run `Nahafuchu-Setup-1.0.1.exe` to install per user under `%LOCALAPPDATA%\Programs\Nahafuchu`. Setup adds a Start menu shortcut and an uninstall entry. No administrator rights are needed.
+Run `Nahafuchu-Setup-1.0.2.exe` to install per user under `%LOCALAPPDATA%\Programs\Nahafuchu`. Setup adds a Start menu shortcut and an uninstall entry. No administrator rights are needed.
+
+For a silent per-user installation, run `Nahafuchu-Setup-1.0.2.exe /S`. Silent setup uses the default install folder, creates a Start menu shortcut and uninstall entry, and does not show dialogs or launch the app. It returns exit code `0` on success and `1` on failure. Failures are logged to `%TEMP%\Nahafuchu-Setup.log`.
 

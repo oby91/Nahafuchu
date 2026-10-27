@@ -8,7 +8,7 @@
     <AssemblyName>Nahafuchu-Setup</AssemblyName>
     <RootNamespace>NahafuchuSetup</RootNamespace>
     <ApplicationIcon>..\Assets\Nahafuchu.ico</ApplicationIcon>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <Product>Nahafuchu Setup</Product>
   </PropertyGroup>
   <ItemGroup>
