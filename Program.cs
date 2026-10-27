@@ -1,6 +1,10 @@
 using System.IO;
+using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
+using Microsoft.Win32;
 using System.Windows.Automation;
 using System.Windows.Forms;
 
@@ -16,8 +20,57 @@ internal static class Program
             return;
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new LayoutFixContext());
+        Application.Run(new LayoutFixContext(AppSettings.Load()));
     }
+}
+
+internal enum DisplayLanguage
+{
+    English,
+    Hebrew
+}
+
+internal sealed class AppSettings
+{
+    private static readonly string SettingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Nahafuchu",
+        "settings.json");
+
+    public DisplayLanguage Language { get; set; } = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "he"
+        ? DisplayLanguage.Hebrew
+        : DisplayLanguage.English;
+    public bool IsEnabled { get; set; } = true;
+    public bool StartWithWindows { get; set; }
+    public bool IsHebrew => Language == DisplayLanguage.Hebrew;
+
+    public static AppSettings Load()
+    {
+        try
+        {
+            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+            if (settings is not null && Enum.IsDefined(settings.Language))
+                return settings;
+        }
+        catch
+        {
+        }
+
+        return new AppSettings();
+    }
+
+    public void Save()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    public AppSettings Clone() => new()
+    {
+        Language = Language,
+        IsEnabled = IsEnabled,
+        StartWithWindows = StartWithWindows
+    };
 }
 
 internal sealed class LayoutFixContext : ApplicationContext
@@ -25,30 +78,59 @@ internal sealed class LayoutFixContext : ApplicationContext
     private readonly NotifyIcon _trayIcon;
     private readonly KeyboardHook _keyboardHook;
     private readonly Control _dispatcher;
+    private readonly ContextMenuStrip _menu;
+    private readonly ToolStripMenuItem _enabledItem;
+    private readonly ToolStripMenuItem _settingsItem;
+    private readonly ToolStripMenuItem _aboutItem;
+    private readonly ToolStripMenuItem _helpItem;
+    private readonly ToolStripMenuItem _exitItem;
+    private AppSettings _settings;
     private bool _operationInProgress;
 
-    public LayoutFixContext()
+    public LayoutFixContext(AppSettings settings)
     {
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("Exit", null, (_, _) => ExitThread());
+        _settings = settings;
+        try
+        {
+            StartupRegistration.SetEnabled(_settings.StartWithWindows);
+        }
+        catch (Exception exception)
+        {
+            Diagnostics.Write($"Could not synchronize startup setting: {exception}");
+            _settings.StartWithWindows = false;
+        }
+
+        _menu = new ContextMenuStrip { ShowImageMargin = false };
+        _enabledItem = new ToolStripMenuItem { CheckOnClick = true, Checked = _settings.IsEnabled };
+        _enabledItem.Click += (_, _) => ToggleEnabled();
+        _settingsItem = new ToolStripMenuItem();
+        _settingsItem.Click += (_, _) => ShowSettings();
+        _aboutItem = new ToolStripMenuItem();
+        _aboutItem.Click += (_, _) => ShowAbout();
+        _helpItem = new ToolStripMenuItem();
+        _helpItem.Click += (_, _) => OpenHelp();
+        _exitItem = new ToolStripMenuItem();
+        _exitItem.Click += (_, _) => ExitThread();
+        _menu.Items.AddRange([_enabledItem, new ToolStripSeparator(), _settingsItem, _helpItem, _aboutItem, new ToolStripSeparator(), _exitItem]);
 
         _trayIcon = new NotifyIcon
         {
-            Text = "Nahafuchu: F10 converts text and switches language",
+            Text = string.Empty,
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application,
-            ContextMenuStrip = menu,
+            ContextMenuStrip = _menu,
             Visible = true
         };
+        ApplyLanguage();
 
         _dispatcher = new Control();
         _dispatcher.CreateControl();
-        _keyboardHook = new KeyboardHook(() => _dispatcher.BeginInvoke(OnF10Pressed));
+        _keyboardHook = new KeyboardHook(() => _dispatcher.BeginInvoke(OnF10Pressed), () => _settings.IsEnabled);
         Diagnostics.Write("Nahafuchu started and keyboard hook installed.");
     }
 
     private void OnF10Pressed()
     {
-        if (_operationInProgress)
+        if (!_settings.IsEnabled || _operationInProgress)
             return;
 
         _operationInProgress = true;
@@ -148,18 +230,271 @@ internal sealed class LayoutFixContext : ApplicationContext
 
     private void ShowFailure(string message)
     {
-        _trayIcon.BalloonTipTitle = "Nahafuchu";
-        _trayIcon.BalloonTipText = message;
+        _trayIcon.BalloonTipTitle = _settings.IsHebrew ? "נהפוכו" : "Nahafuchu";
+        _trayIcon.BalloonTipText = LocalizeFailure(message);
         _trayIcon.ShowBalloonTip(1500);
+    }
+
+    private string LocalizeFailure(string message)
+    {
+        if (!_settings.IsHebrew)
+            return message;
+
+        return message switch
+        {
+            "No focused editor was found." => "לא נמצא שדה עריכה פעיל.",
+            "The focused item is not an editable text field." => "הפריט הפעיל אינו שדה טקסט לעריכה.",
+            "The focused editor did not provide fresh copied text." => "שדה העריכה הפעיל לא סיפק טקסט חדש להעתקה.",
+            "The clipboard is currently busy." => "לוח הגזירים תפוס כרגע.",
+            "The focused editor changed during conversion." => "שדה העריכה השתנה במהלך ההמרה.",
+            "Conversion failed. See Nahafuchu.log for details." => "ההמרה נכשלה. פרטים מופיעים בקובץ Nahafuchu.log.",
+            _ => message
+        };
+    }
+
+    private void ApplyLanguage()
+    {
+        var hebrew = _settings.IsHebrew;
+        _menu.RightToLeft = hebrew ? RightToLeft.Yes : RightToLeft.No;
+        _enabledItem.Text = _settings.IsEnabled
+            ? (hebrew ? "השבת את נהפוכו" : "Disable Nahafuchu")
+            : (hebrew ? "הפעל את נהפוכו" : "Enable Nahafuchu");
+        _enabledItem.Checked = _settings.IsEnabled;
+        _settingsItem.Text = hebrew ? "הגדרות..." : "Settings...";
+        _helpItem.Text = hebrew ? "עזרה" : "Help";
+        _aboutItem.Text = hebrew ? "אודות נהפוכו" : "About Nahafuchu";
+        _exitItem.Text = hebrew ? "יציאה" : "Exit";
+        _trayIcon.Text = hebrew
+            ? "נהפוכו: F10 ממיר טקסט ומחליף שפה"
+            : "Nahafuchu: F10 converts text layout";
+    }
+
+    private void ToggleEnabled()
+    {
+        _settings.IsEnabled = _enabledItem.Checked;
+        try
+        {
+            _settings.Save();
+            Diagnostics.Write(_settings.IsEnabled ? "Conversion enabled from tray menu." : "Conversion paused from tray menu.");
+            ApplyLanguage();
+        }
+        catch (Exception exception)
+        {
+            Diagnostics.Write($"Could not save enabled setting: {exception}");
+            _settings.IsEnabled = !_enabledItem.Checked;
+            ApplyLanguage();
+            ShowFailure("Conversion failed. See Nahafuchu.log for details.");
+        }
+    }
+
+    private void ShowSettings()
+    {
+        using var dialog = new SettingsDialog(_settings);
+        if (dialog.ShowDialog() != DialogResult.OK)
+            return;
+
+        var updated = dialog.UpdatedSettings;
+        try
+        {
+            StartupRegistration.SetEnabled(updated.StartWithWindows);
+            updated.Save();
+            _settings = updated;
+            ApplyLanguage();
+            Diagnostics.Write($"Settings saved: language={_settings.Language}, startWithWindows={_settings.StartWithWindows}.");
+        }
+        catch (Exception exception)
+        {
+            Diagnostics.Write($"Could not apply settings: {exception}");
+            MessageBox.Show(
+                dialog,
+                _settings.IsHebrew ? "לא ניתן לשמור את ההגדרות. בדוק את הרשאות המשתמש." : "Settings could not be saved. Check your user permissions.",
+                _settings.IsHebrew ? "נהפוכו" : "Nahafuchu",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private void ShowAbout()
+    {
+        using var dialog = new AboutDialog(_settings.IsHebrew);
+        dialog.ShowDialog();
+    }
+
+    private void OpenHelp()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("https://github.com/oby91/Nahafuchu") { UseShellExecute = true });
+        }
+        catch (Exception exception)
+        {
+            Diagnostics.Write($"Could not open GitHub help page: {exception}");
+            ShowFailure("Conversion failed. See Nahafuchu.log for details.");
+        }
     }
 
     protected override void ExitThreadCore()
     {
         _keyboardHook.Dispose();
         _dispatcher.Dispose();
+        _menu.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         base.ExitThreadCore();
+    }
+}
+
+internal sealed class SettingsDialog : Form
+{
+    private readonly ComboBox _language = new();
+    private readonly Label _shortcutLabel = new();
+    private readonly CheckBox _startWithWindows = new();
+    private readonly bool _hebrew;
+
+    public AppSettings UpdatedSettings { get; }
+
+    public SettingsDialog(AppSettings current)
+    {
+        UpdatedSettings = current.Clone();
+        _hebrew = current.IsHebrew;
+        Text = _hebrew ? "הגדרות נהפוכו" : "Nahafuchu Settings";
+        ClientSize = new Size(430, 230);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen;
+        RightToLeft = _hebrew ? RightToLeft.Yes : RightToLeft.No;
+        RightToLeftLayout = _hebrew;
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+
+        var languageLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(24, 28),
+            Text = _hebrew ? "שפת תצוגה:" : "Display language:"
+        };
+        _language.DropDownStyle = ComboBoxStyle.DropDownList;
+        _language.Items.AddRange(["English", "עברית"]);
+        _language.SelectedIndex = current.Language == DisplayLanguage.Hebrew ? 1 : 0;
+        _language.Location = new Point(24, 55);
+        _language.Size = new Size(375, 28);
+
+        _shortcutLabel.AutoSize = true;
+        _shortcutLabel.Location = new Point(24, 98);
+        _shortcutLabel.Text = _hebrew ? "קיצור מקשים: F10" : "Keyboard shortcut: F10";
+
+        _startWithWindows.AutoSize = true;
+        _startWithWindows.Checked = current.StartWithWindows;
+        _startWithWindows.Location = new Point(24, 128);
+        _startWithWindows.Text = _hebrew ? "הפעל את נהפוכו עם הכניסה ל־Windows" : "Start Nahafuchu when I sign in to Windows";
+
+        var save = new Button
+        {
+            Text = _hebrew ? "שמור" : "Save",
+            DialogResult = DialogResult.OK,
+            Location = new Point(220, 170),
+            Size = new Size(86, 32)
+        };
+        save.Click += (_, _) =>
+        {
+            UpdatedSettings.Language = _language.SelectedIndex == 1 ? DisplayLanguage.Hebrew : DisplayLanguage.English;
+            UpdatedSettings.StartWithWindows = _startWithWindows.Checked;
+        };
+        var cancel = new Button
+        {
+            Text = _hebrew ? "ביטול" : "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(313, 170),
+            Size = new Size(86, 32)
+        };
+
+        Controls.AddRange([languageLabel, _language, _shortcutLabel, _startWithWindows, save, cancel]);
+        AcceptButton = save;
+        CancelButton = cancel;
+    }
+}
+
+internal sealed class AboutDialog : Form
+{
+    public AboutDialog(bool hebrew)
+    {
+        var name = hebrew ? "נהפוכו" : "Nahafuchu";
+        var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
+        Text = hebrew ? "אודות נהפוכו" : "About Nahafuchu";
+        ClientSize = new Size(460, 250);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen;
+        RightToLeft = hebrew ? RightToLeft.Yes : RightToLeft.No;
+        RightToLeftLayout = hebrew;
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+
+        var logo = new PictureBox
+        {
+            Image = Icon.ToBitmap(),
+            Location = new Point(24, 22),
+            Size = new Size(56, 56),
+            SizeMode = PictureBoxSizeMode.StretchImage
+        };
+        var heading = new Label
+        {
+            Text = name,
+            Font = new Font("Segoe UI", 18, FontStyle.Bold),
+            Location = new Point(94, 28),
+            Size = new Size(330, 34)
+        };
+        var description = new Label
+        {
+            Text = hebrew
+                ? "תיקון טקסט שהוקלד בפריסת מקלדת שגויה. F10 ממיר את השורה או את הטקסט המסומן."
+                : "Fix text typed with the wrong keyboard layout. F10 converts the current line or selected text.",
+            Location = new Point(25, 100),
+            Size = new Size(410, 52),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        var versionLabel = new Label
+        {
+            Text = hebrew ? $"גרסה {version}" : $"Version {version}",
+            Location = new Point(25, 158),
+            Size = new Size(410, 22),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        var github = new Button
+        {
+            Text = hebrew ? "פרויקט ב־GitHub" : "Nahafuchu on GitHub",
+            Location = new Point(147, 194),
+            Size = new Size(150, 32)
+        };
+        github.Click += (_, _) => Process.Start(new ProcessStartInfo("https://github.com/oby91/Nahafuchu") { UseShellExecute = true });
+        var close = new Button
+        {
+            Text = hebrew ? "סגור" : "Close",
+            DialogResult = DialogResult.OK,
+            Location = new Point(310, 194),
+            Size = new Size(90, 32)
+        };
+        Controls.AddRange([logo, heading, description, versionLabel, github, close]);
+        AcceptButton = close;
+        CancelButton = close;
+    }
+}
+
+internal static class StartupRegistration
+{
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string ValueName = "Nahafuchu";
+
+    public static void SetEnabled(bool enabled)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true)
+            ?? Registry.CurrentUser.CreateSubKey(RunKey, writable: true)
+            ?? throw new IOException("Could not open the current user's startup settings.");
+
+        if (enabled)
+            key.SetValue(ValueName, $"\"{Application.ExecutablePath}\"", RegistryValueKind.String);
+        else if (key.GetValue(ValueName) is not null)
+            key.DeleteValue(ValueName, throwOnMissingValue: false);
     }
 }
 
@@ -174,13 +509,15 @@ internal sealed class KeyboardHook : IDisposable
     private const uint LlkhfInjected = 0x10;
 
     private readonly Action _onPressed;
+    private readonly Func<bool> _isEnabled;
     private readonly NativeMethods.LowLevelKeyboardProc _callback;
     private readonly IntPtr _hook;
     private bool _f10Held;
 
-    public KeyboardHook(Action onPressed)
+    public KeyboardHook(Action onPressed, Func<bool> isEnabled)
     {
         _onPressed = onPressed;
+        _isEnabled = isEnabled;
         _callback = HookCallback;
         _hook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _callback, IntPtr.Zero, 0);
         if (_hook == IntPtr.Zero)
@@ -197,6 +534,8 @@ internal sealed class KeyboardHook : IDisposable
                 var message = wParam.ToInt32();
                 if (message is WmKeyDown or WmSysKeyDown)
                 {
+                    if (!_isEnabled())
+                        return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
                     _f10Held = true;
                 }
                 else if (message is WmKeyUp or WmSysKeyUp)
@@ -204,7 +543,11 @@ internal sealed class KeyboardHook : IDisposable
                     var shouldRun = _f10Held;
                     _f10Held = false;
                     if (shouldRun)
+                    {
                         _onPressed();
+                        return new IntPtr(1);
+                    }
+                    return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
                 }
 
                 return new IntPtr(1);

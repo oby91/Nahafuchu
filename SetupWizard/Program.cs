@@ -37,7 +37,7 @@ internal static class Program
 internal sealed class SetupWizard : Form
 {
     private const string AppName = "Nahafuchu";
-    private const string AppVersion = "1.0.2";
+    private const string AppVersion = "1.1.0";
     private const string PayloadResource = "NahafuchuSetup.Payload.exe";
     private const string UninstallerResource = "NahafuchuSetup.Uninstall.ps1";
 

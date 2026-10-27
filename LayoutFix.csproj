@@ -9,7 +9,7 @@
     <AssemblyName>Nahafuchu</AssemblyName>
     <RootNamespace>Nahafuchu</RootNamespace>
     <ApplicationIcon>Assets\Nahafuchu.ico</ApplicationIcon>
-    <Version>1.0.2</Version>
+    <Version>1.1.0</Version>
     <Product>Nahafuchu</Product>
   </PropertyGroup>
   <ItemGroup>
